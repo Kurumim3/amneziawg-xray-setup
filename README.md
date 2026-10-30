@@ -11,37 +11,31 @@ Automated AmneziaWG VPN installation and management for Debian and Ubuntu server
 - Optional Brazil-only SSH access restriction.
 - Network and system optimizations.
 - Scheduled maintenance and Docker cleanup.
-- Configuration and obfuscation management.
-- Status monitoring and uninstall options.
+- Configuration, obfuscation management and status monitoring.
 
 ## Requirements
 
 - Debian 11+ or Ubuntu 20.04+
 - Root or sudo access
 - Internet connection
-- Docker and Docker Compose (installed automatically if needed)
 
 ## Quick Start
 
-Clone the repository:
-
 ```bash
-git clone https://github.com/USER/REPOSITORY.git
-cd REPOSITORY
-```
+# 1. Clone the repository
+git clone https://github.com/Kurumim3/amneziawg-setup.git
 
-Make the script executable and run it:
+# 2. Enter the project directory
+cd amneziawg-setup
 
-```bash
+# 3. Make the script executable
 chmod +x amneziawg-setup.sh
-sudo ./amneziawg-setup.sh
+
+# 4. Run the interactive menu
+sudo bash amneziawg-setup.sh
 ```
 
-Follow the interactive menu to configure or install the services.
-
-## Installation Options
-
-The menu provides:
+## Installation Menu
 
 1. Configure installation
 2. Full installation
@@ -59,7 +53,7 @@ Automatic maintenance can include:
 
 - Docker image updates.
 - Unused image and package cleanup.
-- Journal log rotation.
+- Journal log cleanup.
 - Optional unattended security updates.
 
 Scheduled maintenance runs weekly.
