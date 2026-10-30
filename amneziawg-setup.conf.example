@@ -1,0 +1,11 @@
+# Exemplo de arquivo de configuração (copie para /etc/awg-setup.conf)
+DOMAIN='vpn.exemplo.com'
+EMAIL='admin@exemplo.com'
+SSH_PORT='49152'
+VPN_PORT='54844'
+PANEL_PORT='54845'
+PANEL_USER='admin'
+PANEL_PASS_HASH=''
+INSTALL_DIR='/opt/amneziawg'
+ADMIN_IP=''
+LANG_UI='pt'
