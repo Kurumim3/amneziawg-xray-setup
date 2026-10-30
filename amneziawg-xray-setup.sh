@@ -14,7 +14,7 @@ CONF_FILE="/etc/awg-setup.conf"
 WL_FILE="/etc/awg-ssh-whitelist.txt"
 APT_UPDATED=0
 LANG_UI="${LANG_UI:-pt}"
-SCRIPT_VERSION="1.0"
+SCRIPT_VERSION="1.1"
 
 if [ -t 1 ]; then
   R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; B=$'\e[34m'; C=$'\e[36m'; W=$'\e[1m'; N=$'\e[0m'
@@ -178,6 +178,8 @@ t() {
     en:option) echo "Option";;
     pt:invalid_option) echo "Opção inválida.";;
     en:invalid_option) echo "Invalid option.";;
+    pt:invalid_email) echo "E-mail parece inválido (esperado usuario@dominio.tld).";;
+    en:invalid_email) echo "Email looks invalid (expected user@domain.tld).";;
     *)
       case "pt:$k" in
         pt:menu_title) echo "AmneziaWG 3.1 - Configuração completa";;
@@ -253,6 +255,9 @@ load_conf() {
   LANG_UI="${LANG_UI:-pt}"
   case "$LANG_UI" in pt|en) ;; *) LANG_UI=pt ;; esac
   # SSH_CLIENT is not guaranteed to exist (for example, console/cloud-init runs).
+  XRAY_PORT="${XRAY_PORT:-8443}"
+  XRAY_TARGET="${XRAY_TARGET:-www.microsoft.com}"
+  XRAY_SNI="${XRAY_SNI:-www.microsoft.com}"
   ADMIN_IP="${ADMIN_IP:-$(printf '%s' "${SSH_CLIENT-}" | awk '{print $1}') }"
   ADMIN_IP="${ADMIN_IP% }"
 }
@@ -269,6 +274,9 @@ PANEL_PASS_HASH=$(printf %q "$PANEL_PASS_HASH")
 INSTALL_DIR=$(printf %q "$INSTALL_DIR")
 ADMIN_IP=$(printf %q "$ADMIN_IP")
 LANG_UI=$(printf %q "$LANG_UI")
+XRAY_PORT=$(printf %q "$XRAY_PORT")
+XRAY_TARGET=$(printf %q "$XRAY_TARGET")
+XRAY_SNI=$(printf %q "$XRAY_SNI")
 EOF
   chmod 600 "$CONF_FILE"
 }
@@ -294,6 +302,9 @@ step_config() {
 
   d_email="$EMAIL"
   ask_allow_empty "$(t prompt_email)" d_email
+  if [ -n "$d_email" ] && ! [[ "$d_email" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
+    warn "$(t invalid_email)"
+  fi
 
   d_ssh="$SSH_PORT"
   while :; do
@@ -384,6 +395,10 @@ ensure_config() {
     return 1
   fi
   [[ "$SSH_PORT" != 80 && "$SSH_PORT" != 443 && "$PANEL_PORT" != 80 && "$PANEL_PORT" != 443 && "$PANEL_PORT" != "$SSH_PORT" ]] || { err "$(t err_port_conflict)"; return 1; }
+  if ! valid_port "$XRAY_PORT" || [ "$XRAY_PORT" = 80 ] || [ "$XRAY_PORT" = 443 ] || [ "$XRAY_PORT" = "$SSH_PORT" ] || [ "$XRAY_PORT" = "$PANEL_PORT" ]; then
+    err "Porta XRAY_PORT inválida ou conflitante em $CONF_FILE."
+    return 1
+  fi
   [[ "$INSTALL_DIR" =~ ^/[A-Za-z0-9_./-]+$ && "$INSTALL_DIR" != *'/../'* && "$INSTALL_DIR" != */.. ]] || { err "$(t err_invalid_install_dir)"; return 1; }
   [[ "$PANEL_USER" =~ ^[A-Za-z0-9_.@-]+$ ]] || { err "$(t err_invalid_panel_user) $CONF_FILE."; return 1; }
   if [ -n "$PANEL_PASS_HASH" ]; then [[ "$PANEL_PASS_HASH" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] || { err "$(t err_invalid_pass_hash)"; return 1; }; fi
@@ -485,6 +500,9 @@ step_firewall() {
   ufw allow 80/tcp  comment 'HTTP (ACME)' >/dev/null
   ufw allow 443/tcp comment 'HTTPS painel' >/dev/null
   ufw allow "$VPN_PORT"/udp comment 'AmneziaWG' >/dev/null
+  if command -v xray >/dev/null 2>&1 || [ -x /usr/local/bin/xray ]; then
+    ufw allow "$XRAY_PORT"/tcp comment 'Xray VLESS REALITY' >/dev/null
+  fi
   # Default-deny forwarded traffic. Docker maintains its own explicit forwarding
   # chains for published ports and container egress; do not globally ACCEPT all
   # forwarded traffic just to make the VPN work.
@@ -494,6 +512,7 @@ step_firewall() {
     printf '\nDEFAULT_FORWARD_POLICY="DROP"\n' >> /etc/default/ufw
   fi
   ufw --force enable
+  info "DEFAULT_FORWARD_POLICY=DROP: o container AmneziaWG precisa fazer NAT interno (responsabilidade da imagem). Se clientes VPN não navegarem, verifique iptables dentro do container."
   ufw reload
   ok "UFW ativo."
   ufw status numbered
@@ -552,7 +571,7 @@ services:
       - net.ipv6.conf.all.forwarding=1
       - net.ipv6.conf.default.forwarding=1
 EOF
-  chmod 600 "$INSTALL_DIR/docker-compose.yml"
+  chmod 640 "$INSTALL_DIR/docker-compose.yml"
 }
 
 step_deploy() {
@@ -591,11 +610,19 @@ step_deploy() {
 
   write_compose
   (cd "$INSTALL_DIR" && dc config -q && dc pull && dc up -d) || { err "Falha na validação do Compose ou ao subir o container."; return 1; }
-  sleep 5
+  local i=0
+  while [ "$i" -lt 30 ]; do
+    docker inspect -f '{{.State.Running}}' amneziawg-ui 2>/dev/null | grep -qx true && break
+    sleep 1
+    i=$((i+1))
+  done
   if ! docker inspect -f '{{.State.Running}}' amneziawg-ui 2>/dev/null | grep -qx true; then
     err "O container não está em execução. Logs recentes:"
     docker logs --tail 80 amneziawg-ui 2>&1 || true
     return 1
+  fi
+  if grep -q '^DEFAULT_FORWARD_POLICY="DROP"' /etc/default/ufw 2>/dev/null; then
+    warn "UFW com forward DROP: se clientes VPN não tiverem internet, verifique NAT dentro do container."
   fi
   docker ps --filter name=amneziawg-ui
   docker logs --tail 25 amneziawg-ui 2>&1
@@ -1106,6 +1133,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+TimeoutStartSec=90
 ExecStart=/usr/local/bin/update-br-ips.sh
 EOF
   cat > /etc/systemd/system/awg-geo-ssh.timer <<'EOF'
@@ -1113,7 +1141,7 @@ EOF
 Description=Atualização diária da lista de IPs BR
 
 [Timer]
-OnBootSec=1min
+OnBootSec=15s
 OnUnitActiveSec=1d
 Persistent=true
 
@@ -1276,13 +1304,256 @@ EOF
 }
 
 #---------------------------------------------------------------------
+# Xray VLESS + REALITY (instalação independente do AmneziaWG)
+#---------------------------------------------------------------------
+XRAY_INSTALL_URL="https://github.com/XTLS/Xray-install/raw/main/install-release.sh"
+XRAY_CONFIG="/usr/local/etc/xray/config.json"
+XRAY_CLIENT_FILE="/root/xray-vless-reality.txt"
+
+xray_install_core() {
+  local installer
+  installer=$(mktemp /tmp/xray-install.XXXXXX.sh) || return 1
+  info "Baixando instalador oficial XTLS/Xray-install..."
+  if ! curl -fsSL --retry 3 --connect-timeout 15 "$XRAY_INSTALL_URL" -o "$installer"; then
+    rm -f "$installer"
+    err "Não foi possível baixar o instalador oficial do Xray."
+    return 1
+  fi
+  if ! bash "$installer" install --manually-restart-later; then
+    rm -f "$installer"
+    err "Falha na instalação do Xray-core."
+    return 1
+  fi
+  rm -f "$installer"
+  command -v xray >/dev/null 2>&1 || [ -x /usr/local/bin/xray ] || {
+    err "Instalador terminou, mas o binário Xray não foi encontrado."
+    return 1
+  }
+  ok "Xray-core instalado/atualizado pelo instalador oficial."
+}
+
+step_xray_install() {
+  ensure_config || return 1
+  local port target sni uuid key_output private_key public_key short_id tmp_config tmp_client
+  echo -e "\n${W}== Xray VLESS + REALITY ==${N}"
+  echo "Este serviço é independente do AmneziaWG e usará TCP."
+  port="$XRAY_PORT"
+  while :; do
+    ask "Porta TCP do Xray (padrão 8443; 443 está reservado ao Nginx)" port "$port"
+    if ! valid_port "$port" || [ "$port" = 80 ] || [ "$port" = 443 ] || [ "$port" = "$SSH_PORT" ] || [ "$port" = "$PANEL_PORT" ]; then
+      warn "Porta inválida ou conflitante com HTTP/HTTPS, SSH ou painel."
+      continue
+    fi
+    break
+  done
+  target="$XRAY_TARGET"
+  while :; do
+    ask "Host de destino REALITY (sem :porta; TLS 1.3 e HTTP/2)" target "$target"
+    valid_domain "$target" && break
+    warn "Informe um hostname válido, sem protocolo, caminho ou porta."
+  done
+  sni="$XRAY_SNI"
+  while :; do
+    ask "ServerName/SNI aceito pelo host de destino" sni "$sni"
+    valid_domain "$sni" && break
+    warn "Informe um hostname válido."
+  done
+
+  if ! getent ahosts "$target" >/dev/null 2>&1; then
+    err "O host de destino não resolve via DNS: $target"
+    return 1
+  fi
+  if ! timeout 8 bash -c ':</dev/tcp/$1/443' _ "$target" 2>/dev/null; then
+    err "Não foi possível alcançar ${target}:443 a partir desta VPS."
+    return 1
+  fi
+  systemctl stop xray 2>/dev/null || true
+  if ss -ltnH "sport = :${port}" 2>/dev/null | grep -q .; then
+    err "A porta TCP ${port} já está em uso por outro serviço."
+    return 1
+  fi
+
+  pkg ca-certificates curl openssl iproute2 || return 1
+  xray_install_core || return 1
+  uuid=$(xray uuid 2>/dev/null) || { err "Falha ao gerar UUID."; return 1; }
+  key_output=$(xray x25519 2>/dev/null) || { err "Falha ao gerar chaves REALITY."; return 1; }
+  private_key=$(printf '%s\n' "$key_output" | awk -F': *' '/^(PrivateKey|Private key):/{print $2; exit}')
+  public_key=$(printf '%s\n' "$key_output" | awk -F': *' '/^(Password|PublicKey|Public key):/{print $2; exit}')
+  if [ -z "$private_key" ] || [ -z "$public_key" ] || ! [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+    err "Não foi possível interpretar a saída de 'xray x25519' ou 'xray uuid'."
+    return 1
+  fi
+  short_id=$(openssl rand -hex 8) || return 1
+
+  mkdir -p /usr/local/etc/xray || return 1
+  if getent group xray >/dev/null 2>&1; then
+    chown root:xray /usr/local/etc/xray
+    chmod 750 /usr/local/etc/xray
+  fi
+  tmp_config=$(mktemp /usr/local/etc/xray/config.XXXXXX) || return 1
+  cat > "$tmp_config" <<EOF
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": ${port},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          { "id": "${uuid}", "flow": "xtls-rprx-vision" }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "target": "${target}:443",
+          "xver": 0,
+          "serverNames": ["${sni}"],
+          "privateKey": "${private_key}",
+          "shortIds": ["${short_id}"]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    { "protocol": "freedom", "tag": "direct" },
+    { "protocol": "blackhole", "tag": "block" }
+  ]
+}
+EOF
+  chmod 640 "$tmp_config"
+  if getent group xray >/dev/null 2>&1; then chown root:xray "$tmp_config"; fi
+  if ! xray run -test -config "$tmp_config" 2>/dev/null \
+     && ! xray -test -config "$tmp_config" 2>/dev/null; then
+    rm -f "$tmp_config"
+    systemctl start xray 2>/dev/null || true
+    err "A validação da configuração do Xray falhou; configuração anterior preservada."
+    return 1
+  fi
+  if ! mv -f "$tmp_config" "$XRAY_CONFIG"; then
+    rm -f "$tmp_config"
+    err "Não foi possível instalar a configuração do Xray."
+    return 1
+  fi
+  chmod 640 "$XRAY_CONFIG"
+  if getent group xray >/dev/null 2>&1; then chown root:xray "$XRAY_CONFIG"; fi
+
+  XRAY_PORT="$port"
+  XRAY_TARGET="$target"
+  XRAY_SNI="$sni"
+  save_conf
+
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q 'Status: active'; then
+    ufw allow "${port}/tcp" comment 'Xray VLESS REALITY' >/dev/null || warn "Não foi possível adicionar a regra UFW automaticamente."
+  fi
+  systemctl daemon-reload
+  if ! systemctl enable --now xray; then
+    err "Xray não iniciou. Consulte: journalctl -u xray -n 80 --no-pager"
+    return 1
+  fi
+  if ! systemctl is-active --quiet xray; then
+    err "Xray não está ativo após a inicialização."
+    return 1
+  fi
+
+  local link
+  link="vless://${uuid}@${DOMAIN}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp#Xray-REALITY"
+  umask 077
+  tmp_client=$(mktemp /root/xray-client.XXXXXX) || return 1
+  {
+    echo "Xray VLESS + REALITY"
+    echo "Servidor: ${DOMAIN}"
+    echo "Porta TCP: ${port}"
+    echo "UUID: ${uuid}"
+    echo "SNI: ${sni}"
+    echo "Fingerprint: chrome"
+    echo "Public key: ${public_key}"
+    echo "Short ID: ${short_id}"
+    echo "Flow: xtls-rprx-vision"
+    echo
+    echo "Link de importação:"
+    echo "$link"
+  } > "$tmp_client"
+  chmod 600 "$tmp_client"
+  mv -f "$tmp_client" "$XRAY_CLIENT_FILE"
+
+  ok "Xray VLESS + REALITY instalado e ativo na porta TCP ${port}."
+  info "Link de cliente salvo em ${XRAY_CLIENT_FILE} (permissão 600)."
+  echo
+  echo "$link"
+  warn "Libere TCP ${port} também no firewall/security group do provedor da VPS."
+  info "Use um cliente compatível com Xray/REALITY (por exemplo, v2rayNG, v2rayN, NekoBox ou Hiddify)."
+}
+
+step_xray_status() {
+  echo -e "\n${W}== Status Xray ==${N}"
+  if command -v xray >/dev/null 2>&1 || [ -x /usr/local/bin/xray ]; then
+    xray version 2>&1 | head -2
+    systemctl --no-pager --full status xray 2>&1 | head -14 || true
+    echo "Portas:"
+    ss -ltnp 2>/dev/null | grep -E ":${XRAY_PORT}([[:space:]]|$)" || true
+    [ ! -f "$XRAY_CLIENT_FILE" ] || info "Dados do cliente: ${XRAY_CLIENT_FILE}"
+  else
+    info "Xray não está instalado."
+  fi
+}
+
+step_xray_remove() {
+  local installer
+  if ! command -v xray >/dev/null 2>&1 && [ ! -x /usr/local/bin/xray ]; then
+    info "Xray não está instalado."
+    return 0
+  fi
+  confirm "Remover Xray, configuração REALITY e link de cliente?" n || return 0
+  installer=$(mktemp /tmp/xray-remove.XXXXXX.sh) || return 1
+  if ! curl -fsSL --retry 3 --connect-timeout 15 "$XRAY_INSTALL_URL" -o "$installer"; then
+    rm -f "$installer"
+    err "Não foi possível baixar o removedor oficial do Xray."
+    return 1
+  fi
+  systemctl disable --now xray 2>/dev/null || true
+  if ! bash "$installer" remove --purge; then
+    rm -f "$installer"
+    err "Falha na remoção oficial do Xray."
+    return 1
+  fi
+  rm -f "$installer" "$XRAY_CLIENT_FILE"
+  if command -v ufw >/dev/null 2>&1; then ufw delete allow "${XRAY_PORT}/tcp" >/dev/null 2>&1 || true; fi
+  ok "Xray removido. AmneziaWG e os demais serviços foram mantidos."
+}
+
+xray_menu() {
+  while :; do
+    ui_section "Xray VLESS + REALITY"
+    echo "  1) Instalar / reconfigurar Xray"
+    echo "  2) Status do Xray"
+    echo "  3) Remover somente Xray"
+    echo "  0) Voltar"
+    local xopt
+    read -rp "${W}$(t option) > ${N}" xopt
+    case "$xopt" in
+      1) step_xray_install; pause ;;
+      2) step_xray_status; pause ;;
+      3) step_xray_remove; pause ;;
+      0|q|Q) return 0 ;;
+      *) warn "Opção inválida."; sleep 1 ;;
+    esac
+  done
+}
+
+#---------------------------------------------------------------------
 # 10) Status / verificação
 #---------------------------------------------------------------------
 step_status() {
   ensure_config || return 1
   echo -e "\n${W}== Status ==${N}"
   echo -e "${B}-- Container --${N}"; docker ps --filter name=amneziawg-ui 2>/dev/null
-  echo -e "${B}-- Portas --${N}"; ss -tulpn 2>/dev/null | grep -E ":(${SSH_PORT}|80|443|${VPN_PORT}|${PANEL_PORT}) " || true
+  echo -e "${B}-- Xray --${N}"; systemctl is-active xray 2>/dev/null || echo "inativo/não instalado"
+  echo -e "${B}-- Portas --${N}"; ss -tulpn 2>/dev/null | grep -E ":(${SSH_PORT}|80|443|${VPN_PORT}|${PANEL_PORT}|${XRAY_PORT}) " || true
   echo -e "${B}-- UFW --${N}"; ufw status 2>/dev/null | head -20
   echo -e "${B}-- Fail2Ban --${N}"
   if command -v fail2ban-client >/dev/null 2>&1; then
@@ -1329,6 +1600,8 @@ step_remove() {
   read -rp "$(t remove_confirm) [${expected}]: " word
   [ "$word" = "$expected" ] || { warn "Confirmação incorreta; abortado."; return 1; }
 
+  # Xray é independente; oferecer remoção separada para evitar apagar sem consentimento.
+  step_xray_remove
   # a) container
   if [ -d "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/docker-compose.yml" ]; then
     (cd "$INSTALL_DIR" && dc down --remove-orphans) 2>/dev/null || docker rm -f amneziawg-ui 2>/dev/null || true
@@ -1382,6 +1655,7 @@ advanced_menu() {
     t adv_opt1
     t adv_opt2
     t adv_opt3
+    echo "  4) Instalar / gerenciar Xray VLESS + REALITY"
     t adv_opt0
     echo
     local aopt
@@ -1390,6 +1664,7 @@ advanced_menu() {
       1) toggle_lang; pause ;;
       2) step_remove; pause ;;
       3) step_awg_params; pause ;;
+      4) xray_menu ;;
       0|q|Q) return 0 ;;
       *) warn "$(t invalid_option)"; sleep 1 ;;
     esac
@@ -1401,9 +1676,18 @@ step_summary() {
   ui_section "RESUMO DA INSTALAÇÃO"
   echo "Script:      amneziawg-setup v${SCRIPT_VERSION}"
   echo "Painel:      https://${DOMAIN}   (usuário: ${PANEL_USER})"
-  echo "VPN:         ${DOMAIN}:${VPN_PORT}/udp"
+  echo "VPN:         ${DOMAIN}:${VPN_PORT}/udp (AmneziaWG)"
+  echo "Xray:        ${DOMAIN}:${XRAY_PORT}/tcp (VLESS + REALITY; se instalado)"
   echo "SSH:         porta ${SSH_PORT}"
   echo "Config:      ${CONF_FILE}   Compose: ${INSTALL_DIR}/docker-compose.yml"
+  local https_ok="FALHOU"
+  curl -skI --max-time 5 "https://${DOMAIN}" >/dev/null 2>&1 && https_ok="OK"
+  echo "HTTPS:       ${https_ok}"
+  if systemctl is-active --quiet xray 2>/dev/null; then
+    echo "Xray:        ${DOMAIN}:${XRAY_PORT}/tcp (VLESS + REALITY, ativo)"
+  else
+    echo "Xray:        não instalado/inativo"
+  fi
   echo
   echo "Próximos passos:"
   echo "  1. Entre no painel, crie o servidor/clientes e ajuste I1/Jc/Jmin/Jmax."
