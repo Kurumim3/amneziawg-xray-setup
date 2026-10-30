@@ -22,11 +22,37 @@ else
   R=""; G=""; Y=""; B=""; C=""; W=""; N=""
 fi
 
-info() { echo -e "${C}[i]${N} $*"; }
-ok()   { echo -e "${G}[ok]${N} $*"; }
-warn() { echo -e "${Y}[!]${N} $*"; }
-err()  { echo -e "${R}[x]${N} $*" >&2; }
+# Saída visual padronizada (sem alterar as rotinas de instalação).
+info() { echo -e "${C}[i]${N}  $*"; }
+ok()   { echo -e "${G}[✓]${N}  $*"; }
+warn() { echo -e "${Y}[!]${N}  $*"; }
+err()  { echo -e "${R}[✗]${N}  $*" >&2; }
 die()  { err "$*"; exit 1; }
+
+ui_banner() {
+  echo -e "${C}${W}"
+  cat <<'EOF'
+    _                        _          _       _    ____  _       _
+   / \   _ __ ___  _ __   ___| |_  ___  (_) __ _| |  / ___|| |_ ___| |__
+  / _ \ | '_ ` _ \| '_ \ / _ \ __|/ _ \ |/ _` | |  \___ \| __/ __| '_ \
+ / ___ \| | | | | | | | |  __/ |_|  __/ | (_| | |   ___) | || (__| | | |
+/_/   \_\_| |_| |_|_| |_|\___|\__|\___|_|\__,_|_|  |____/ \__\___|_| |_|
+EOF
+  echo -e "${N}${B}                 VPN installer & configuration manager${N}"
+}
+
+ui_section() {
+  local title="$1"
+  echo -e "\n${B}${W}┌─ ${title}${N}"
+  echo -e "${B}└$(printf '─%.0s' {1..58})${N}"
+}
+
+ui_stage() {
+  local current="$1" total="$2" label="$3"
+  echo -e "\n${C}${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+  echo -e "${C}${W}  ETAPA ${current}/${total}  ${N}${W}${label}${N}"
+  echo -e "${C}${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+}
 
 #---------------------------------------------------------------------
 # i18n (pt/en) — dicionário compacto; fallback para pt
@@ -1350,14 +1376,14 @@ step_remove() {
 
 advanced_menu() {
   while :; do
-    echo -e "\n${W}== $(t adv_title) ==${N}"
+    ui_section "$(t adv_title)"
     echo "$(t adv_opt1)"
     echo "$(t adv_opt2)"
     echo "$(t adv_opt3)"
     echo "$(t adv_opt0)"
     echo
     local aopt
-    read -rp "$(t option): " aopt
+    read -rp "${W}$(t option) > ${N}" aopt
     case "$aopt" in
       1) toggle_lang; pause ;;
       2) step_remove; pause ;;
@@ -1370,7 +1396,7 @@ advanced_menu() {
 
 step_summary() {
   load_conf
-  echo -e "\n${W}================ RESUMO ================${N}"
+  ui_section "RESUMO DA INSTALAÇÃO"
   echo "Script:      amneziawg-setup v${SCRIPT_VERSION}"
   echo "Painel:      https://${DOMAIN}   (usuário: ${PANEL_USER})"
   echo "VPN:         ${DOMAIN}:${VPN_PORT}/udp"
@@ -1384,19 +1410,39 @@ step_summary() {
 }
 
 full_install() {
+  ui_banner
+  ui_section "INSTALAÇÃO COMPLETA"
   ensure_config || return 1
-  step_system   || return 1
+
+  ui_stage 1 8 "Preparação do sistema e Docker"
+  step_system || return 1
+
+  ui_stage 2 8 "Configuração do firewall"
   step_firewall || return 1
-  # Senha: se ainda não existir, pedir agora
+
+  # Senha: se ainda não existir, pedir agora.
   if [ -z "$PANEL_PASS_HASH" ]; then
+    ui_stage 3 8 "Credenciais do painel"
     set_panel_password || return 1
   fi
-  step_deploy   || return 1
-  step_nginx    || warn "Nginx/SSL falhou; a instalação continuará, mas HTTPS não deve ser considerado operacional. Corrija e rode a opção 5."
+
+  ui_stage 4 8 "Implantação do AmneziaWG"
+  step_deploy || return 1
+
+  ui_stage 5 8 "Nginx e certificado SSL"
+  step_nginx || warn "Nginx/SSL falhou; a instalação continuará, mas HTTPS não deve ser considerado operacional. Corrija e rode a opção 5."
+
+  ui_stage 6 8 "Proteção Fail2Ban"
   step_fail2ban || warn "Fail2Ban falhou; a proteção contra tentativas de login pode estar incompleta. Corrija e rode a opção 5."
+
+  ui_stage 7 8 "Manutenção automática"
   step_maintenance || warn "Configuração da manutenção falhou; verifique timers e permissões."
+
+  ui_stage 8 8 "Endurecimento SSH e restrição geográfica opcional"
   step_ssh || warn "A configuração SSH não foi validada; mantenha a sessão atual aberta e corrija antes de sair."
   confirm "Ativar também a restrição de SSH somente Brasil?" n && step_geoblock
+
+  ui_section "INSTALAÇÃO — RESUMO FINAL"
   step_summary
 }
 
@@ -1407,12 +1453,15 @@ menu() {
   while :; do
     load_conf
     clear 2>/dev/null || true
-    echo -e "${W}==============================================${N}"
-    echo -e "${W}   $(t menu_title)  v${SCRIPT_VERSION}${N}"
-    echo -e "${W}==============================================${N}"
-    echo -e " Domínio: ${C}${DOMAIN:-?}${N}  SSH: ${C}${SSH_PORT}${N}  VPN: ${C}${VPN_PORT}/udp${N}"
-    echo -e "${Y}$(t menu_hint)${N}"
-    echo
+    ui_banner
+    echo -e "\n${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+    echo -e "${W}  $(t menu_title)${N}  ${C}v${SCRIPT_VERSION}${N}"
+    echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+    echo -e "  ${B}DOMÍNIO${N}  ${C}${DOMAIN:-não configurado}${N}"
+    echo -e "  ${B}SSH${N}      ${C}${SSH_PORT}${N}     ${B}VPN${N}  ${C}${VPN_PORT}/udp${N}"
+    echo -e "\n${Y}$(t menu_hint)${N}\n"
+    echo -e "${W}  MENU PRINCIPAL${N}"
+    echo -e "${B}  ────────────────────────────────────────────────────────${N}"
     echo "$(t menu_opt1)"
     echo "$(t menu_opt2)"
     echo "$(t menu_opt3)"
@@ -1422,8 +1471,9 @@ menu() {
     echo "$(t menu_opt7)"
     echo "$(t menu_opt8)"
     echo "$(t menu_opt9)"
+    echo -e "${B}  ────────────────────────────────────────────────────────${N}"
     echo
-    read -rp "$(t option): " opt
+    read -rp "${W}$(t option) > ${N}" opt
     case "$opt" in
       1) step_config; pause ;;
       2) full_install; pause ;;
