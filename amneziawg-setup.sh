@@ -379,7 +379,10 @@ ensure_config() {
     return 1
   fi
   valid_domain "$DOMAIN" || { err "$(t err_invalid_domain_conf) $CONF_FILE: $DOMAIN"; return 1; }
-  valid_port "$SSH_PORT" && valid_port "$VPN_PORT" && valid_port "$PANEL_PORT" || { err "$(t err_invalid_ports)"; return 1; }
+  if ! valid_port "$SSH_PORT" || ! valid_port "$VPN_PORT" || ! valid_port "$PANEL_PORT"; then
+    err "$(t err_invalid_ports)"
+    return 1
+  fi
   [[ "$SSH_PORT" != 80 && "$SSH_PORT" != 443 && "$PANEL_PORT" != 80 && "$PANEL_PORT" != 443 && "$PANEL_PORT" != "$SSH_PORT" ]] || { err "$(t err_port_conflict)"; return 1; }
   [[ "$INSTALL_DIR" =~ ^/[A-Za-z0-9_./-]+$ && "$INSTALL_DIR" != *'/../'* && "$INSTALL_DIR" != */.. ]] || { err "$(t err_invalid_install_dir)"; return 1; }
   [[ "$PANEL_USER" =~ ^[A-Za-z0-9_.@-]+$ ]] || { err "$(t err_invalid_panel_user) $CONF_FILE."; return 1; }
@@ -614,8 +617,7 @@ step_ssh() {
   pkg openssh-server || return 1
 
   local conf=/etc/ssh/sshd_config hard=/etc/ssh/sshd_config.d/00-awg-hardening.conf
-  local old_hard="" old_main="" had_hard=0 pw_line="" current_ports
-  current_ports=$(current_ssh_ports)
+  local old_hard="" old_main="" had_hard=0 pw_line=""
   if command -v ufw >/dev/null 2>&1 && ! ufw status 2>/dev/null | grep -qE "^${SSH_PORT}/tcp[[:space:]]+ALLOW"; then
     warn "A porta ${SSH_PORT}/tcp NÃO está liberada no UFW. Rode a opção 3 (Sistema + Firewall) antes de encerrar a sessão atual."
   fi
@@ -1377,10 +1379,10 @@ step_remove() {
 advanced_menu() {
   while :; do
     ui_section "$(t adv_title)"
-    echo "$(t adv_opt1)"
-    echo "$(t adv_opt2)"
-    echo "$(t adv_opt3)"
-    echo "$(t adv_opt0)"
+    t adv_opt1
+    t adv_opt2
+    t adv_opt3
+    t adv_opt0
     echo
     local aopt
     read -rp "${W}$(t option) > ${N}" aopt
@@ -1462,15 +1464,15 @@ menu() {
     echo -e "\n${Y}$(t menu_hint)${N}\n"
     echo -e "${W}  MENU PRINCIPAL${N}"
     echo -e "${B}  ────────────────────────────────────────────────────────${N}"
-    echo "$(t menu_opt1)"
-    echo "$(t menu_opt2)"
-    echo "$(t menu_opt3)"
-    echo "$(t menu_opt4)"
-    echo "$(t menu_opt5)"
-    echo "$(t menu_opt6)"
-    echo "$(t menu_opt7)"
-    echo "$(t menu_opt8)"
-    echo "$(t menu_opt9)"
+    t menu_opt1
+    t menu_opt2
+    t menu_opt3
+    t menu_opt4
+    t menu_opt5
+    t menu_opt6
+    t menu_opt7
+    t menu_opt8
+    t menu_opt9
     echo -e "${B}  ────────────────────────────────────────────────────────${N}"
     echo
     read -rp "${W}$(t option) > ${N}" opt
