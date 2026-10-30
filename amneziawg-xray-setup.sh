@@ -184,6 +184,7 @@ t() {
       case "pt:$k" in
         pt:menu_title) echo "AmneziaWG 3.1 - Configuração completa";;
         pt:pause) echo "Pressione ENTER para continuar...";;
+        pt:invalid_email) echo "E-mail parece inválido (esperado usuario@dominio.tld).";;
         *) echo "$k";;
       esac
       ;;
@@ -625,12 +626,12 @@ step_deploy() {
     warn "UFW com forward DROP: se clientes VPN não tiverem internet, verifique NAT dentro do container."
   fi
   docker ps --filter name=amneziawg-ui
-  docker logs --tail 25 amneziawg-ui 2>&1
   local http_code
   http_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${PANEL_PORT}/" 2>/dev/null || true)
   case "$http_code" in
     2??|3??|401|403) ok "Container em execução e painel respondendo localmente (HTTP ${http_code}): http://127.0.0.1:${PANEL_PORT}" ;;
-    *) warn "Container em execução, mas o painel não respondeu com HTTP esperado (código: ${http_code:-sem resposta}) na porta ${PANEL_PORT}. Confira os logs e WEB_UI_PORT." ;;
+    *) warn "Container em execução, mas o painel não respondeu com HTTP esperado (código: ${http_code:-sem resposta}) na porta ${PANEL_PORT}. Confira os logs e WEB_UI_PORT."
+       docker logs --tail 25 amneziawg-ui 2>&1 || true ;;
   esac
   warn "Se o login falhar, confira o formato de WEB_UI_PASSWORD na documentação da imagem."
 }
@@ -1363,6 +1364,7 @@ step_xray_install() {
     err "O host de destino não resolve via DNS: $target"
     return 1
   fi
+  # shellcheck disable=SC2016  # $1 is intentionally expanded by the child Bash.
   if ! timeout 8 bash -c ':</dev/tcp/$1/443' _ "$target" 2>/dev/null; then
     err "Não foi possível alcançar ${target}:443 a partir desta VPS."
     return 1
@@ -1677,7 +1679,6 @@ step_summary() {
   echo "Script:      amneziawg-setup v${SCRIPT_VERSION}"
   echo "Painel:      https://${DOMAIN}   (usuário: ${PANEL_USER})"
   echo "VPN:         ${DOMAIN}:${VPN_PORT}/udp (AmneziaWG)"
-  echo "Xray:        ${DOMAIN}:${XRAY_PORT}/tcp (VLESS + REALITY; se instalado)"
   echo "SSH:         porta ${SSH_PORT}"
   echo "Config:      ${CONF_FILE}   Compose: ${INSTALL_DIR}/docker-compose.yml"
   local https_ok="FALHOU"
