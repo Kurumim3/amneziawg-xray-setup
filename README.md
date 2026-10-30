@@ -1,17 +1,19 @@
-# AmneziaWG 3.1
+# AmneziaWG 3.1 — VPN Server Installer with Xray
 
-Automated AmneziaWG VPN installation and management for Debian and Ubuntu servers.
+Automated AmneziaWG and Xray VPN installation and management for Debian and Ubuntu servers. Features Docker deployment, VLESS + REALITY support, web panel, firewall configuration and server hardening.
 
 ## Features
 
 - Automated AmneziaWG deployment using Docker.
+- Xray integration with VLESS + REALITY.
 - Web panel with Nginx and SSL.
 - Firewall configuration with UFW.
 - SSH hardening and Fail2Ban protection.
 - Optional Brazil-only SSH access restriction.
 - Network and system optimizations.
 - Scheduled maintenance and Docker cleanup.
-- Configuration, obfuscation management and status monitoring.
+- Configuration and obfuscation management.
+- AmneziaWG and Xray status monitoring.
 
 ## Requirements
 
@@ -23,10 +25,10 @@ Automated AmneziaWG VPN installation and management for Debian and Ubuntu server
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/Kurumim3/amneziawg-setup.git
+git clone https://github.com/Kurumim3/amneziawg-xray-setup.git
 
 # 2. Enter the project directory
-cd amneziawg-setup
+cd amneziawg-xray-setup
 
 # 3. Make the script executable
 chmod +x amneziawg-setup.sh
